@@ -11,7 +11,16 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// --- ✅ CORRECTED CORS CONFIGURATION ---
+// --- NEW DEBUGGING LOG ---
+console.log("--- Checking Environment Variables ---");
+if (process.env.GOOGLE_API_KEY) {
+    console.log("GOOGLE_API_KEY is loaded successfully.");
+} else {
+    console.error("CRITICAL ERROR: GOOGLE_API_KEY is NOT loaded!");
+}
+console.log("------------------------------------");
+// --- END DEBUGGING LOG ---
+
 // This temporarily allows requests from ANY origin to test the connection.
 app.use(cors());
 
