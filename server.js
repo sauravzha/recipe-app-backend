@@ -1,23 +1,28 @@
 // server.js
 // This file runs on your Node.js backend server.
 
-require('dotenv').config(); 
+require('dotenv').config();
 
 const express = require('express');
-const cors = require('cors'); 
+const cors = require('cors');
 
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const app = express();
-const PORT = process.env.PORT || 3001; 
+const PORT = process.env.PORT || 3001;
 
-app.use(cors({ origin: 'http://localhost:5173' })); 
-app.use(express.json()); 
+// ✅ Updated CORS configuration with YOUR specific Vercel URL
+const corsOptions = {
+    origin: 'https://ai-recipe-app-gules.vercel.app'
+};
+app.use(cors(corsOptions));
+
+app.use(express.json());
 
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
 
 const geminiModel = genAI.getGenerativeModel({
-    model: "gemini-2.0-flash",
+    model: "gemini-1.5-flash", // Updated to a newer, recommended model
     safetySettings: [
         { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
         { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
@@ -33,7 +38,6 @@ app.post('/generate-recipe', async (req, res) => {
         return res.status(400).json({ error: "Please add at least one ingredient." });
     }
 
-    // REVISED PROMPT: Make it even more explicit about the JSON structure and image inclusion.
     const recipePrompt = `
         You are an expert chef. Generate a detailed recipe in ${language} for ${servings} people using the following ingredients and their available quantities: ${ingredientsText}.
         Preferences: ${preferenceText}.
@@ -59,7 +63,7 @@ app.post('/generate-recipe', async (req, res) => {
             "ingredients": ["1 cup flour", "2 eggs"],
             "instructions": ["Step 1...", "Step 2..."]
           },
-          "imageUrl": "data:image/png;base64,..." // Base64 string of the image if generated, or "" if not.
+          "imageUrl": "data:image/png;base64,..."
         }
     `;
 
@@ -67,16 +71,9 @@ app.post('/generate-recipe', async (req, res) => {
         const geminiResponse = await geminiModel.generateContent({
             contents: [{ role: "user", parts: [{ text: recipePrompt }] }],
             generationConfig: {
-                // Keep application/json to encourage structured output
-                responseMimeType: "application/json", 
+                responseMimeType: "application/json",
             },
         });
-
-        // --- REVISED PARSING LOGIC ---
-        // Log the full response for debugging
-        console.log("\n--- Raw Gemini Response (Full Object) ---");
-        console.log(JSON.stringify(geminiResponse.response, null, 2));
-        console.log("---------------------------------------\n");
 
         const candidates = geminiResponse.response.candidates;
         let rawTextResponse = '';
@@ -85,10 +82,9 @@ app.post('/generate-recipe', async (req, res) => {
         if (candidates && candidates.length > 0 && candidates[0].content && candidates[0].content.parts) {
             for (const part of candidates[0].content.parts) {
                 if (part.text) {
-                    rawTextResponse += part.text; // Concatenate all text parts
+                    rawTextResponse += part.text;
                 } else if (part.inlineData && part.inlineData.mimeType.startsWith('image/')) {
-                    // This is an image part, prefer this if present
-                    extractedImageUrl = `data:${part.inlineData.mimeType};base64,${part.inlineData.bytes}`;
+                    extractedImageUrl = `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
                 }
             }
         }
@@ -96,21 +92,16 @@ app.post('/generate-recipe', async (req, res) => {
         let finalRecipe = null;
         let finalImageUrl = '';
 
-        // First, try to parse the concatenated text response as a single JSON object
         try {
-            // Attempt to parse directly (if the entire response is JSON)
             const parsedFullResponse = JSON.parse(rawTextResponse);
-            if (parsedFullResponse.recipe) { // Check if it contains the expected 'recipe' key
+            if (parsedFullResponse.recipe) {
                 finalRecipe = parsedFullResponse.recipe;
-                // Prefer imageUrl from the parsed JSON if it's there
                 finalImageUrl = parsedFullResponse.imageUrl || extractedImageUrl;
             } else {
-                // If it's JSON but doesn't have a 'recipe' key, maybe it's just the recipe object itself
                 finalRecipe = parsedFullResponse;
-                finalImageUrl = extractedImageUrl; // Use extracted image if no imageUrl in top-level JSON
+                finalImageUrl = extractedImageUrl;
             }
         } catch (parseError) {
-            // If direct parsing fails, try to extract JSON from a markdown code block
             const jsonMatch = rawTextResponse.match(/```json\n([\s\S]*?)\n```/);
             if (jsonMatch && jsonMatch[1]) {
                 try {
@@ -118,21 +109,17 @@ app.post('/generate-recipe', async (req, res) => {
                     finalRecipe = parsedFromMarkdown.recipe || parsedFromMarkdown;
                     finalImageUrl = parsedFromMarkdown.imageUrl || extractedImageUrl;
                 } catch (innerParseError) {
-                    console.error("Failed to parse JSON from markdown block:", innerParseError);
                     throw new Error("Gemini returned text that could not be parsed as valid JSON from markdown.");
                 }
             } else {
-                console.error("Gemini raw text response (could not parse as JSON):", rawTextResponse);
                 throw new Error("Gemini returned an unexpected response format. Expected JSON.");
             }
         }
 
-        // Final check: if an image was extracted as a separate part, ensure it's used
         if (extractedImageUrl && !finalImageUrl) {
             finalImageUrl = extractedImageUrl;
         }
-        
-        // If no image was found at all, ensure imageUrl is an empty string for the frontend
+
         if (!finalImageUrl) {
             finalImageUrl = '';
         }
@@ -145,24 +132,20 @@ app.post('/generate-recipe', async (req, res) => {
 
     } catch (error) {
         console.error('Backend Error during recipe/image generation:', error);
-
-        let errorMessage = "Sorry, the kitchen is a bit busy! Couldn't generate a recipe. Please try again. (Server Error)";
+        let errorMessage = "Sorry, the kitchen is a bit busy! Couldn't generate a recipe. Please try again.";
 
         if (error.code === 8 || (error.details && error.details.includes("RESOURCE_EXHAUSTED"))) {
-            errorMessage = "API quota exceeded or too many requests. Please try again later. (Gemini Free Tier Limit Reached)";
-        } else if (error.code === 7 || (error.details && error.details.includes("PERMISSION_DENIED")) || (error.message && error.message.includes("403"))) {
-            errorMessage = "Authentication error with Google API. Check your API key or service account permissions.";
-        } else if (error.message.includes("returned an unexpected response format") || error.message.includes("could not be parsed as valid JSON")) {
-            errorMessage = "AI model returned an unreadable response. Please try again or adjust your prompt.";
-        } else if (error.message.includes("Failed to parse Gemini JSON")) {
-             errorMessage = "AI model's response was malformed. Please try again.";
+            errorMessage = "API quota exceeded. Please try again later.";
+        } else if (error.code === 7 || (error.details && error.details.includes("PERMISSION_DENIED"))) {
+            errorMessage = "Authentication error with Google API. Check your API key.";
+        } else if (error.message.includes("could not be parsed as valid JSON")) {
+            errorMessage = "AI model returned an unreadable response. Please try again.";
         }
 
         res.status(500).json({ error: errorMessage });
     }
 });
 
-// --- Start the Backend Server ---
 app.listen(PORT, () => {
     console.log(`Backend server running on http://localhost:${PORT}`);
 });
