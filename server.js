@@ -11,11 +11,9 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// ✅ Updated CORS configuration with YOUR specific Vercel URL
-const corsOptions = {
-    origin: 'https://ai-recipe-app-gules.vercel.app'
-};
-app.use(cors(corsOptions));
+// --- ✅ CORRECTED CORS CONFIGURATION ---
+// This temporarily allows requests from ANY origin to test the connection.
+app.use(cors());
 
 app.use(express.json());
 
